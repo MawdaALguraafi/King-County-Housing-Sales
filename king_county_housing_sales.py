@@ -99,6 +99,23 @@ fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
 
 fig.show()
 
+avg_price_bathrooms = df.groupby("bathrooms")["price"].mean().reset_index()
+
+fig = px.bar(
+    avg_price_bathrooms,
+    x="bathrooms",
+    y="price",
+    text="price",
+    title="Average House Price by Number of Bathrooms",
+    labels={"bathrooms": "Number of Bathrooms", "price": "Average Price"}
+)
+
+
+fig.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
+
+fig.update_layout(yaxis_tickformat="$,.0f")
+fig.show()
+
 import plotly.express as px
 
 # Compute average price per year built
@@ -113,6 +130,66 @@ fig = px.line(
     labels={"yr_built": "Year Built", "price": "Average Price"}
 )
 
+fig.show()
+
+fig = px.box(
+    df, x="grade", y="price", points="outliers",
+    title="Price Distribution by Grade"
+)
+fig.update_layout(yaxis_tickformat="$,.0f")
+fig.show()
+
+avg_by_floors = df.groupby("floors")["price"].mean().reset_index()
+fig = px.line(
+    avg_by_floors, x="floors", y="price",
+    markers=True, title="Average Price by Number of Floors"
+)
+fig.update_layout(yaxis_tickformat="$,.0f")
+fig.show()
+
+fig = px.scatter_mapbox(
+    df,
+    lat="lat", lon="long",
+    color="price",
+    size="sqft_living",
+    hover_data=["zipcode", "bedrooms", "bathrooms", "sqft_living", "price"],
+    zoom=9,
+    height=600,
+    title="Homes Map – Price & Size"
+)
+
+
+fig.update_layout(
+    mapbox_style="open-street-map",
+    coloraxis_colorbar_title="Price"
+)
+
+fig.show()
+
+avg_price_waterfront = df.groupby("waterfront")["price"].mean().reset_index()
+
+fig = px.bar(
+    avg_price_waterfront,
+    x="waterfront",
+    y="price",
+    text="price",
+    title="Average House Price by Waterfront",
+    labels={"waterfront": "Waterfront (0 = No, 1 = Yes)", "price": "Average Price"}
+)
+
+fig.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
+fig.update_layout(yaxis_tickformat="$,.0f")
+fig.show()
+
+avg_price_view = df.groupby("view")["price"].mean().reset_index()
+
+fig = px.pie(
+    avg_price_view,
+    names="view",
+    values="price",
+    title="Average Price Share by View",
+    hole=0.4
+)
 fig.show()
 
 """### Cleaning & Preprocessing"""
@@ -136,9 +213,25 @@ df = df.rename(columns={
 # Convert sale_date column to datetime format
 df['sale_date'] = pd.to_datetime(df['date'], errors='coerce') if 'sale_date' not in df.columns and 'date' in df.columns else pd.to_datetime(df['sale_date'], errors='coerce')
 
-# Convert sale_date column to datetime formatbase_cols = ['price','living_sqft','grade','num_bathrooms','num_bedrooms','condition','waterfront','sale_date']
+# Convert sale_date column to datetime
+base_cols = [
+    'price',
+    'living_sqft',
+    'grade',
+    'num_bathrooms',
+    'num_bedrooms',
+    'condition',
+    'waterfront',
+    'sale_date'
+]
+
 for c in base_cols:
-    df[c] = pd.to_numeric(df[c], errors='coerce') if c != 'sale_date' else df[c]
+    if c != 'sale_date':
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    else:
+        df[c] = pd.to_datetime(df[c], errors='coerce')  # Convert to datetime
+
+# Drop rows with NaN in any of the base columns
 df = df.dropna(subset=base_cols)
 
 # Drop rows with missing price or sale_date
@@ -190,8 +283,7 @@ train.shape, test.shape
 
 # Build OLS model with selected features
 X_train = sm.add_constant(train[features].astype(float), has_constant='add')
-X_test = sm.add_constant(test[features].astype(float), has_constant='add')
-
+y_train = train['log_price'].astype(float)
 ols_model = sm.OLS(y_train, X_train).fit()
 
 # Align test features with train and predict log_price
@@ -370,6 +462,7 @@ with open("meta.pkl", "wb") as f:
 # import pandas as pd
 # import numpy as np
 # import plotly.express as px
+# import re, pickle, statsmodels.api as sm
 # 
 # st.set_page_config(page_title="House Sales in King County Dashboard", layout="wide")
 # 
@@ -445,7 +538,6 @@ with open("meta.pkl", "wb") as f:
 # - **Market trend**: Used for analyzing how prices and demand have changed over time.
 # """)
 # 
-# 
 # # filters
 # st.sidebar.header("Filters")
 # ym_all = sorted(df["sale_ym"].dropna().unique().tolist())
@@ -453,7 +545,7 @@ with open("meta.pkl", "wb") as f:
 # min_ym, max_ym = min(ym_all), max(ym_all)
 # ym_range = st.sidebar.slider("Sale Date (YM)", min_value=min_ym, max_value=max_ym, value=(min_ym, max_ym), format="YYYY-MM")
 # 
-# # price filter (new)
+# # price filter
 # min_price, max_price = int(df["price"].min()), int(df["price"].max())
 # price_range = st.sidebar.slider(
 #     "Price Range ($)",
@@ -488,14 +580,13 @@ with open("meta.pkl", "wb") as f:
 #         num /= 1000.0
 #     return f"{num:.1f}P"
 # 
-# 
-# 
 # # KPIs
 # c1, c2, c3, c4 = st.columns(4)
 # c1.metric("Total Sales", f"${human_format(f['price'].sum())}")
-# c2.metric("Avg Price",    f"${f['price'].mean():,.0f}" if len(f) else "$0")
-# c3.metric("Median Price", f"${f['price'].median():,.0f}" if len(f) else "$0")
-# c4.metric("Homes Sold",   f"{len(f):,}")
+# c2.metric("Avg Price",    f"${human_format(f['price'].mean() if len(f) else 0)}")
+# c3.metric("Median Price", f"${human_format(f['price'].median() if len(f) else 0)}")
+# c4.metric("Homes Sold",   human_format(len(f)))
+# 
 # 
 # # row 1: line
 # r1c1 = st.columns(1)[0]
@@ -544,7 +635,7 @@ with open("meta.pkl", "wb") as f:
 #         fig_bar.update_yaxes(tickformat=",.0f")
 #         st.plotly_chart(apply_dark_layout(fig_bar), use_container_width=True)
 # 
-# # row 3: pies with soft colors
+# # row 3: bars + pie
 # r3c1, r3c2 = st.columns(2)
 # with r3c1:
 #     st.subheader("Average Price by Waterfront")
@@ -566,8 +657,6 @@ with open("meta.pkl", "wb") as f:
 #             fig.update_yaxes(tickformat=",.0f")
 #             st.plotly_chart(apply_dark_layout(fig, show_legend=False), use_container_width=True)
 # 
-# 
-# 
 # with r3c2:
 #     st.subheader("Average Price Share by View")
 #     if "view" in f.columns:
@@ -584,49 +673,45 @@ with open("meta.pkl", "wb") as f:
 #     st.dataframe(df.head(10))
 # 
 # st.subheader("Statistics Summary")
-# 
 # summary_cols = ["sale_date", "price", "num_bedrooms", "num_bathrooms", "living_sqft", "year_built"]
 # available_cols = [c for c in summary_cols if c in f.columns]
-# 
 # if not f.empty and available_cols:
 #     st.write(f[available_cols].describe(include="all"))
 # else:
 #     st.info("No data available for the selected filters.")
 # 
-# 
-# 
 # st.markdown("---")
-# st.markdown("**Data Source:** House Sales in King County, USA(from Kaggle)")
+# st.markdown("**Data Source:** House Sales in King County, USA (from Kaggle)")
+# 
+# 
+# # 💬 House Price Prediction Chatbot
 # 
 # st.header("💬 House Price Prediction Chatbot")
-# 
 # with st.expander("How to use the chatbot (click to expand)"):
 #     st.markdown("""
 # Enter house details in one message. The chatbot will predict the price.
 # 
-# 
 # Example: `living=2000 grade=8 bath=2 bed=3 cond=4 wf=0 year=2015 month=6`
 # """)
-# 
-# import re, pickle, numpy as np, pandas as pd, statsmodels.api as sm
 # 
 # @st.cache_resource
 # def load_artifacts():
 #     with open("ols_model.pkl", "rb") as f:
 #         ols_model = pickle.load(f)
 #     with open("trend_train.pkl", "rb") as f:
-#         trend_train = pickle.load(f)
+#         trend_train = pickle.load(f)  # dict-like {Period('YYYY-MM','M'): trend_value}
 #     with open("meta.pkl", "rb") as f:
-#         meta = pickle.load(f)
+#         meta = pickle.load(f)  # expects keys: features, X_train_columns, last_trend
 #     return ols_model, trend_train, meta
 # 
 # ols_model, trend_train, meta = load_artifacts()
-# last_trend   = meta["last_trend"]
-# features     = meta["features"]
-# X_train_cols = meta["X_train_columns"]
+# last_trend   = meta.get("last_trend", 0.0)
+# features     = list(meta.get("features", []))
+# X_train_cols = list(meta.get("X_train_columns", []))
 # 
 # def predict_price(living_sqft, grade, num_bathrooms, num_bedrooms,
 #                   condition, waterfront, year, month):
+# 
 #     row = {
 #         "living_sqft": living_sqft,
 #         "grade": grade,
@@ -635,14 +720,31 @@ with open("meta.pkl", "wb") as f:
 #         "condition": condition,
 #         "waterfront": waterfront,
 #     }
+# 
+# 
+#     if "year" in features:
+#         row["year"] = year
+#     if "month" in features:
+#         row["month"] = month
+# 
 #     df_row = pd.DataFrame([row]).astype(float)
-#     ym = pd.Period(f"{year}-{month:02d}", freq="M")
-#     mt = trend_train.get(ym, default=last_trend)
+# 
+# 
+#     ym = pd.Period(f"{int(year)}-{int(month):02d}", freq="M")
+#     mt = trend_train.get(ym, last_trend) if hasattr(trend_train, "get") else last_trend
 #     df_row["market_trend"] = float(mt)
-#     X = sm.add_constant(df_row[features].astype(float), has_constant="add")
+# 
+#     feature_list = features if len(features) else list(df_row.columns)
+# 
+#     X_no_const = df_row.reindex(columns=feature_list, fill_value=0.0).astype(float)
+# 
+# 
+#     X = sm.add_constant(X_no_const, has_constant="add")
 #     X = X.reindex(columns=X_train_cols, fill_value=0.0)
+# 
+# 
 #     y_log = float(ols_model.predict(X).iloc[0])
-#     smear = np.exp(getattr(ols_model, "mse_resid", 0) / 2.0)
+#     smear = float(np.exp(getattr(ols_model, "mse_resid", 0) / 2.0))
 #     return round(float(np.exp(y_log) * smear), 2)
 # 
 # def extract_float(key, text, default=None):
@@ -652,6 +754,7 @@ with open("meta.pkl", "wb") as f:
 # def extract_int(key, text, default=None):
 #     val = extract_float(key, text, None)
 #     return int(val) if val is not None else default
+# 
 # 
 # if "chat" not in st.session_state:
 #     st.session_state.chat = [
@@ -696,9 +799,6 @@ with open("meta.pkl", "wb") as f:
 #     st.session_state.chat.append({"role": "assistant", "content": reply})
 #     with st.chat_message("assistant"):
 #         st.write(reply)
-# 
-# 
-# 
 #
 
 !pip install -q streamlit pyngrok # Install Streamlit and ngrok
@@ -726,3 +826,4 @@ time.sleep(2)
 
 tunnel = ngrok.connect(8501, "http")
 print("Streamlit app is live at:", tunnel.public_url)
+

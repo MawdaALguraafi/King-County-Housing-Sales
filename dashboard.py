@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import re, pickle, statsmodels.api as sm
 
 st.set_page_config(page_title="House Sales in King County Dashboard", layout="wide")
 
@@ -77,7 +78,6 @@ It includes the following fields:
 - **Market trend**: Used for analyzing how prices and demand have changed over time.
 """)
 
-
 # filters
 st.sidebar.header("Filters")
 ym_all = sorted(df["sale_ym"].dropna().unique().tolist())
@@ -85,7 +85,7 @@ ym_all = [pd.Timestamp(t).to_pydatetime() for t in ym_all] or [pd.Timestamp("201
 min_ym, max_ym = min(ym_all), max(ym_all)
 ym_range = st.sidebar.slider("Sale Date (YM)", min_value=min_ym, max_value=max_ym, value=(min_ym, max_ym), format="YYYY-MM")
 
-# price filter (new)
+# price filter
 min_price, max_price = int(df["price"].min()), int(df["price"].max())
 price_range = st.sidebar.slider(
     "Price Range ($)",
@@ -120,14 +120,13 @@ def human_format(num):
         num /= 1000.0
     return f"{num:.1f}P"
 
-
-
 # KPIs
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Sales", f"${human_format(f['price'].sum())}")
-c2.metric("Avg Price",    f"${f['price'].mean():,.0f}" if len(f) else "$0")
-c3.metric("Median Price", f"${f['price'].median():,.0f}" if len(f) else "$0")
-c4.metric("Homes Sold",   f"{len(f):,}")
+c2.metric("Avg Price",    f"${human_format(f['price'].mean() if len(f) else 0)}")
+c3.metric("Median Price", f"${human_format(f['price'].median() if len(f) else 0)}")
+c4.metric("Homes Sold",   human_format(len(f)))
+
 
 # row 1: line
 r1c1 = st.columns(1)[0]
@@ -176,7 +175,7 @@ with r2c2:
         fig_bar.update_yaxes(tickformat=",.0f")
         st.plotly_chart(apply_dark_layout(fig_bar), use_container_width=True)
 
-# row 3: pies with soft colors
+# row 3: bars + pie
 r3c1, r3c2 = st.columns(2)
 with r3c1:
     st.subheader("Average Price by Waterfront")
@@ -198,8 +197,6 @@ with r3c1:
             fig.update_yaxes(tickformat=",.0f")
             st.plotly_chart(apply_dark_layout(fig, show_legend=False), use_container_width=True)
 
-
-
 with r3c2:
     st.subheader("Average Price Share by View")
     if "view" in f.columns:
@@ -216,49 +213,45 @@ with r4c1:
     st.dataframe(df.head(10))
 
 st.subheader("Statistics Summary")
-
 summary_cols = ["sale_date", "price", "num_bedrooms", "num_bathrooms", "living_sqft", "year_built"]
 available_cols = [c for c in summary_cols if c in f.columns]
-
 if not f.empty and available_cols:
     st.write(f[available_cols].describe(include="all"))
 else:
     st.info("No data available for the selected filters.")
 
-
-
 st.markdown("---")
-st.markdown("**Data Source:** House Sales in King County, USA(from Kaggle)")
+st.markdown("**Data Source:** House Sales in King County, USA (from Kaggle)")
+
+
+# 💬 House Price Prediction Chatbot
 
 st.header("💬 House Price Prediction Chatbot")
-
 with st.expander("How to use the chatbot (click to expand)"):
     st.markdown("""
 Enter house details in one message. The chatbot will predict the price.
 
-
 Example: `living=2000 grade=8 bath=2 bed=3 cond=4 wf=0 year=2015 month=6`
 """)
-
-import re, pickle, numpy as np, pandas as pd, statsmodels.api as sm
 
 @st.cache_resource
 def load_artifacts():
     with open("ols_model.pkl", "rb") as f:
         ols_model = pickle.load(f)
     with open("trend_train.pkl", "rb") as f:
-        trend_train = pickle.load(f)
+        trend_train = pickle.load(f)  # dict-like {Period('YYYY-MM','M'): trend_value}
     with open("meta.pkl", "rb") as f:
-        meta = pickle.load(f)
+        meta = pickle.load(f)  # expects keys: features, X_train_columns, last_trend
     return ols_model, trend_train, meta
 
 ols_model, trend_train, meta = load_artifacts()
-last_trend   = meta["last_trend"]
-features     = meta["features"]
-X_train_cols = meta["X_train_columns"]
+last_trend   = meta.get("last_trend", 0.0)
+features     = list(meta.get("features", []))
+X_train_cols = list(meta.get("X_train_columns", []))
 
 def predict_price(living_sqft, grade, num_bathrooms, num_bedrooms,
                   condition, waterfront, year, month):
+
     row = {
         "living_sqft": living_sqft,
         "grade": grade,
@@ -267,14 +260,31 @@ def predict_price(living_sqft, grade, num_bathrooms, num_bedrooms,
         "condition": condition,
         "waterfront": waterfront,
     }
+
+
+    if "year" in features:
+        row["year"] = year
+    if "month" in features:
+        row["month"] = month
+
     df_row = pd.DataFrame([row]).astype(float)
-    ym = pd.Period(f"{year}-{month:02d}", freq="M")
-    mt = trend_train.get(ym, default=last_trend)
+
+
+    ym = pd.Period(f"{int(year)}-{int(month):02d}", freq="M")
+    mt = trend_train.get(ym, last_trend) if hasattr(trend_train, "get") else last_trend
     df_row["market_trend"] = float(mt)
-    X = sm.add_constant(df_row[features].astype(float), has_constant="add")
+
+    feature_list = features if len(features) else list(df_row.columns)
+
+    X_no_const = df_row.reindex(columns=feature_list, fill_value=0.0).astype(float)
+
+
+    X = sm.add_constant(X_no_const, has_constant="add")
     X = X.reindex(columns=X_train_cols, fill_value=0.0)
+
+
     y_log = float(ols_model.predict(X).iloc[0])
-    smear = np.exp(getattr(ols_model, "mse_resid", 0) / 2.0)
+    smear = float(np.exp(getattr(ols_model, "mse_resid", 0) / 2.0))
     return round(float(np.exp(y_log) * smear), 2)
 
 def extract_float(key, text, default=None):
@@ -284,6 +294,7 @@ def extract_float(key, text, default=None):
 def extract_int(key, text, default=None):
     val = extract_float(key, text, None)
     return int(val) if val is not None else default
+
 
 if "chat" not in st.session_state:
     st.session_state.chat = [
@@ -328,6 +339,3 @@ if msg:
     st.session_state.chat.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
         st.write(reply)
-
-
-

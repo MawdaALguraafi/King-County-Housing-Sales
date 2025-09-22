@@ -55,7 +55,7 @@ It includes data exploration, visualization, preprocessing, regression modeling,
 
 Users can enter house details
 
-![Dashboard Screenshot](1.png)
-![Dashboard Screenshot](2.png)
-![Dashboard Screenshot](3.png)
-![Dashboard Screenshot](6.png)
+![Dashboard Screenshot](Images/1.png)
+![Dashboard Screenshot](Images/2.png)
+![Dashboard Screenshot](Images/3.png)
+![Dashboard Screenshot](Images/6.png)
